@@ -28,7 +28,7 @@ I researched on free time. And research and research. Then somehow i
 thinked about [FastCGI](http://www.fastcgi.com/drupal/), and started
 reading it's documentation.
 
-And then an idea came up. Why should i focus on what lot's of web services
+And then an idea came up. Why should i focus on what lot's of web servers
 already do? So i build Syper.
 
 ## Yeah, but what is Syper?
@@ -55,13 +55,13 @@ it could be implemented on Syper, but it could be very "hacky" and it may make
 things more difficult (for example i would need to change from DEALER/ROUTER to
 PUSH/SUB as Mongrel2 does, and that's not all, lots of challenges arises).
 
-## Why could i use Syper for?
+## What could i use Syper for?
 
 You can use it to develop Web Applications using virtually any programming language
 that supports calling plain C functions on a DLL or SO file, or any
 language that can talk 0mq.
 
-Maybe your language of choice already available for Web Development, and you
+Maybe your language of choice is already available for Web Development, and you
 don't need Syper.
 
 I build Syper to use [WinDev](http://www.windev.com/) to develop Web Applications.
@@ -79,6 +79,10 @@ but the tools it provides for data access are great.
 
 And data access is a big part of web development. So, how can i
 do web development using only WinDev? the answer now is Syper.
+
+And also it's a very simple language, we don't have problems recruiting
+people with zero experience using it to start using it and be
+productive.
 
 ## Platforms
 
