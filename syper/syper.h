@@ -31,4 +31,16 @@ SYPERAPI void syper_addzmqbackend(void*, const char*);
 
 SYPERAPI void syper_setzmqlog(void*, const char*);
 
+SYPERAPI void syper_criticalstart(const char*);
+
+SYPERAPI void syper_criticalend(const char*);
+
+SYPERAPI int syper_threadstart(const char*, int, void (*)(void*), void*);
+
+SYPERAPI const char* syper_threadname();
+
+SYPERAPI int syper_threadalive(const char*);
+
+SYPERAPI void syper_threadjoin(const char*);
+
 #endif /* defined(__syper__syper__) */

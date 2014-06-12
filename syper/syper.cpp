@@ -17,20 +17,42 @@
 #include <signal.h>
 #include <sstream>
 #include "stdafx.h"
+#include <hash_map>
 
 #ifdef WIN32
+#include <process.h>
 #define	SYPER_MUTEX	CRITICAL_SECTION
-typedef void SYPER_THREAD_FUNC(void*);
-#define SYPER_FUNC_END return;
-#define SYPER_THREAD void
+#define SYPER_MUTEX_LOCK EnterCriticalSection
+#define SYPER_MUTEX_UNLOCK LeaveCriticalSection
+#define SYPER_THREAD HANDLE
 #else
 #define SYPER_MUTEX pthread_mutex_t
-typedef void* SYPER_THREAD_FUNC(void*);
-#define SYPER_FUNC_END return nullptr;
-#define SYPER_THREAD void*
+#define SYPER_MUTEX_LOCK pthread_mutex_lock
+#define SYPER_MUTEX_UNLOCK pthread_mutex_unlock
+#define SYPER_THREAD pthread_t*
 #endif
 
+struct SyperThreadData {
+	void(*threadfunc)(void*);
+	void* param;
+	std::string name;
+	SYPER_THREAD thread;
+	bool joined;
+};
+
 static int releaseFcgx = 0;
+static std::hash_map < std::string, SYPER_MUTEX* > syper_mutexes;
+static std::hash_map < std::string, SyperThreadData* > syper_threads;
+static SYPER_MUTEX syper_mutex;
+
+void syper_dllinit() {
+#ifdef WIN32
+	InitializeCriticalSection(&syper_mutex);
+#else
+	syper_mutex = new SYPER_MUTEX;
+	pthread_mutex_init(syper_mutex, nullptr);
+#endif
+}
 
 class SyperContext {
 public:
@@ -83,41 +105,16 @@ void syper_log(SyperContext* syp, const char* msg, ...) {
 	mq.close();
 }
 
-void syper_threadstart(SYPER_THREAD_FUNC func, void* param) {
-#ifdef WIN32
-	zmq_threadstart(func, param);
-#else
-	pthread_t worker;
-	pthread_create(&worker, nullptr, func, param);
-#endif
-}
-
 void syper_threadinc(SyperContext* syp) {
-#ifdef WIN32
-	EnterCriticalSection(&syp->threadmux);
-#else
-	pthread_mutex_lock(&syp->threadmux);
-#endif
+	SYPER_MUTEX_LOCK(&syp->threadmux);
 	syp->threadcount += 1;
-#ifdef WIN32
-	LeaveCriticalSection(&syp->threadmux);
-#else
-	pthread_mutex_unlock(&syp->threadmux);
-#endif
+	SYPER_MUTEX_UNLOCK(&syp->threadmux);
 }
 
 void syper_threaddec(SyperContext* syp) {
-#ifdef WIN32
-	EnterCriticalSection(&syp->threadmux);
-#else
-	pthread_mutex_lock(&syp->threadmux);
-#endif
+	SYPER_MUTEX_LOCK(&syp->threadmux);
 	syp->threadcount -= 1;
-#ifdef WIN32
-	LeaveCriticalSection(&syp->threadmux);
-#else
-	pthread_mutex_unlock(&syp->threadmux);
-#endif
+	SYPER_MUTEX_UNLOCK(&syp->threadmux);
 }
 
 void syper_threadwait(SyperContext* syp) {
@@ -520,5 +517,172 @@ SyperContext::~SyperContext() {
 	DeleteCriticalSection(&threadmux);
 #else
 	pthread_mutex_destroy(&threadmux);
+#endif
+}
+
+//std::vector<
+
+void syper_criticalstart(const char* key) {
+	SYPER_MUTEX* mutex = nullptr;
+	SYPER_MUTEX_LOCK(&syper_mutex);
+	if (syper_mutexes.find(key) != syper_mutexes.end()) {
+		mutex = syper_mutexes[key];
+	} else {
+		mutex = new SYPER_MUTEX;
+		syper_mutexes[key] = mutex;
+#ifdef WIN32
+		InitializeCriticalSection(mutex);
+#else
+		pthread_mutex_init(mutex, nullptr);
+#endif
+	}
+	SYPER_MUTEX_UNLOCK(&syper_mutex);
+
+	SYPER_MUTEX_LOCK(mutex);
+}
+
+void syper_criticalend(const char* key) {
+	SYPER_MUTEX* mutex = nullptr;
+	SYPER_MUTEX_LOCK(&syper_mutex);
+	if (syper_mutexes.find(key) != syper_mutexes.end()) {
+		mutex = syper_mutexes[key];
+	} else {
+		SYPER_MUTEX_UNLOCK(&syper_mutex);
+		return;
+	}
+	SYPER_MUTEX_UNLOCK(&syper_mutex);
+
+	SYPER_MUTEX_UNLOCK(mutex);
+}
+
+#define SYPER_THREAD_CRITICAL "SYPER_THREAD_CRITICAL"
+#ifdef WIN32
+
+#endif
+
+#ifdef WIN32
+//DWORD WINAPI
+static unsigned __stdcall //int
+#else
+void*
+#endif
+syper_thread(
+#ifdef WIN32
+	//LPVOID vdata) {
+	void* vdata) {
+	SyperThreadData* data = (SyperThreadData*)vdata;
+#else
+	SyperThreadData* data) {
+#endif
+	data->threadfunc(data->param);
+
+	syper_criticalstart(SYPER_THREAD_CRITICAL);
+	syper_threads.erase(data->name);
+
+#ifdef WIN32
+	if (data->joined == false) {
+		CloseHandle(data->thread);
+	}
+#else
+	if (data->joined == false) {
+		pthread_detach(*data->thread);
+	}
+#endif
+
+	delete data;
+	syper_criticalend(SYPER_THREAD_CRITICAL);
+#ifdef WIN32
+	return 0;
+#else
+	return nullptr;
+#endif
+}
+
+int syper_threadstart(const char* key, int options, void (*threadfunc)(void*), void* param) {
+	syper_criticalstart(SYPER_THREAD_CRITICAL);
+	if (syper_threads.find(key) != syper_threads.end()) {
+		syper_criticalend(SYPER_THREAD_CRITICAL);
+		return -1;
+	}
+
+	SyperThreadData* data = new SyperThreadData;
+	data->param = param;
+	data->threadfunc = threadfunc;
+	data->name = key;
+	data->joined = false;
+
+#ifdef WIN32
+	//data->thread = CreateThread(nullptr, 0, syper_thread, data, 0, nullptr);
+	data->thread = (HANDLE)_beginthreadex(nullptr, 0, syper_thread, data, 0, nullptr); // CREATE_SUSPENDED, nullptr);
+#else
+	data->thread = new pthread_t;
+	if (pthread_create(data->thread, nullptr, syper_thread, data)) {
+		delete data->thread;
+		data->thread = nullptr;
+	}
+#endif
+	if (data->thread != nullptr) {
+		syper_threads[key] = data;
+#ifdef WIN32
+		ResumeThread(data->thread);
+#endif
+	} else {
+		delete data;
+		data = nullptr;
+	}
+	syper_criticalend(SYPER_THREAD_CRITICAL);
+	return 0;
+}
+
+const char* syper_threadname() {
+#ifdef WIN32
+	DWORD threadId = GetCurrentThreadId();
+#else
+	pthread_t threadId = pthread_self();
+#endif
+	syper_criticalstart(SYPER_THREAD_CRITICAL);
+	for (std::hash_map <std::string, SyperThreadData*>::iterator item = syper_threads.begin(); item != syper_threads.end(); item++) {
+		SYPER_THREAD thread = item->second->thread;
+
+#ifdef WIN32
+		if (GetThreadId(thread) == threadId) {
+#else
+		if (pthread_equal(threadId, *thread) != 0) {
+#endif
+			syper_criticalend(SYPER_THREAD_CRITICAL);
+			return item->first.c_str();
+		}
+	}
+	syper_criticalend(SYPER_THREAD_CRITICAL);
+	return "";
+}
+
+int syper_threadalive(const char* key) {
+	syper_criticalstart(SYPER_THREAD_CRITICAL);
+	if (syper_threads.find(key) != syper_threads.end()) {
+		syper_criticalend(SYPER_THREAD_CRITICAL);
+		return 1;
+	}
+	syper_criticalend(SYPER_THREAD_CRITICAL);
+	return 0;
+}
+
+void syper_threadjoin(const char* key) {
+	SYPER_THREAD thread = nullptr;
+	syper_criticalstart(SYPER_THREAD_CRITICAL);
+	if (syper_threads.find(key) == syper_threads.end()) {
+		syper_criticalend(SYPER_THREAD_CRITICAL);
+		return;
+	}
+	SyperThreadData* data = syper_threads[key];
+	thread = data->thread;
+	data->joined = true;
+	syper_criticalend(SYPER_THREAD_CRITICAL);
+
+#ifdef WIN32
+	WaitForSingleObject(thread, INFINITE);
+	CloseHandle(thread);
+#else
+	pthread_join(thread);
 #endif
 }
