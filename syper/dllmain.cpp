@@ -3,6 +3,7 @@
 
 void syper_dllinit();
 
+#ifdef WIN32
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
                        LPVOID lpReserved
@@ -11,7 +12,11 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 	switch (ul_reason_for_call)
 	{
 	case DLL_PROCESS_ATTACH:
+#else
+__attribute__((constructor)) void dllinit(void) {
+#endif
 		syper_dllinit();
+#ifdef WIN32
 	case DLL_THREAD_ATTACH:
 	case DLL_THREAD_DETACH:
 	case DLL_PROCESS_DETACH:
@@ -19,4 +24,6 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 	}
 	return TRUE;
 }
-
+#else
+}
+#endif

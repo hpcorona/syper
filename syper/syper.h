@@ -11,7 +11,13 @@
 
 #include "stdafx.h"
 
+#ifdef WIN32
 #define SYPERAPI extern "C" __declspec(dllexport)
+#define SYPERDECL
+#else
+#define SYPERAPI extern "C" __attribute__ ((visibility ("default")))
+#define SYPERDECL
+#endif
 
 SYPERAPI void* syper_init();
 

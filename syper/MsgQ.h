@@ -27,7 +27,7 @@ public:
 	MsgQException();
 	MsgQException(int);
 	MsgQException(const char*);
-	virtual ~MsgQException();
+	virtual ~MsgQException() throw();
 
 	virtual const char* what() const throw();
 };

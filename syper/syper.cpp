@@ -17,19 +17,26 @@
 #include <signal.h>
 #include <sstream>
 #include "stdafx.h"
-#include <hash_map>
+#ifdef WIN32
+#include <unordered_map>
+#else
+#include <tr1/unordered_map>
+using namespace std::tr1;
+#endif
+using namespace std;
 
 #ifdef WIN32
 #include <process.h>
 #define	SYPER_MUTEX	CRITICAL_SECTION
-#define SYPER_MUTEX_LOCK EnterCriticalSection
-#define SYPER_MUTEX_UNLOCK LeaveCriticalSection
+#define SYPER_MUTEX_LOCK(a) EnterCriticalSection(&a)
+#define SYPER_MUTEX_UNLOCK(a) LeaveCriticalSection(&a)
 #define SYPER_THREAD HANDLE
 #else
-#define SYPER_MUTEX pthread_mutex_t
-#define SYPER_MUTEX_LOCK pthread_mutex_lock
-#define SYPER_MUTEX_UNLOCK pthread_mutex_unlock
+#define SYPER_MUTEX pthread_mutex_t*
+#define SYPER_MUTEX_LOCK(a) pthread_mutex_lock(a)
+#define SYPER_MUTEX_UNLOCK(a) pthread_mutex_unlock(a)
 #define SYPER_THREAD pthread_t*
+#include <assert.h>
 #endif
 
 struct SyperThreadData {
@@ -41,15 +48,19 @@ struct SyperThreadData {
 };
 
 static int releaseFcgx = 0;
-static std::hash_map < std::string, SYPER_MUTEX* > syper_mutexes;
-static std::hash_map < std::string, SyperThreadData* > syper_threads;
+#ifdef WIN32
+static unordered_map < std::string, SYPER_MUTEX* > syper_mutexes;
+#else
+static unordered_map < std::string, SYPER_MUTEX > syper_mutexes;
+#endif
+static unordered_map < std::string, SyperThreadData* > syper_threads;
 static SYPER_MUTEX syper_mutex;
 
 void syper_dllinit() {
 #ifdef WIN32
 	InitializeCriticalSection(&syper_mutex);
 #else
-	syper_mutex = new SYPER_MUTEX;
+	syper_mutex = new pthread_mutex_t;
 	pthread_mutex_init(syper_mutex, nullptr);
 #endif
 }
@@ -94,7 +105,11 @@ void syper_log(SyperContext* syp, const char* msg, ...) {
 	msgf[0] = 0;
 	va_list args;
 	va_start(args, msg);
+#ifdef WIN32
 	vsprintf_s(msgf, 200, msg, args);
+#else
+	vsnprintf(msgf, 200, msg, args);
+#endif
 	va_end(args);
 	while (syp->running) {
 		ret = mq.sends(msgf, 0);
@@ -106,15 +121,15 @@ void syper_log(SyperContext* syp, const char* msg, ...) {
 }
 
 void syper_threadinc(SyperContext* syp) {
-	SYPER_MUTEX_LOCK(&syp->threadmux);
+	SYPER_MUTEX_LOCK(syp->threadmux);
 	syp->threadcount += 1;
-	SYPER_MUTEX_UNLOCK(&syp->threadmux);
+	SYPER_MUTEX_UNLOCK(syp->threadmux);
 }
 
 void syper_threaddec(SyperContext* syp) {
-	SYPER_MUTEX_LOCK(&syp->threadmux);
+	SYPER_MUTEX_LOCK(syp->threadmux);
 	syp->threadcount -= 1;
-	SYPER_MUTEX_UNLOCK(&syp->threadmux);
+	SYPER_MUTEX_UNLOCK(syp->threadmux);
 }
 
 void syper_threadwait(SyperContext* syp) {
@@ -125,7 +140,11 @@ void syper_threadwait(SyperContext* syp) {
 		return;
 	}
 	while (syp->threadcount >= syp->maxthreads) {
+#ifdef WIN32
 		Sleep(1);
+#else
+		usleep(1);
+#endif
 	}
 	syper_log(syp, "[fcgi] Ok, we're back into business");
 }
@@ -160,7 +179,11 @@ void syper_handlerequest(void* vreq) {
 	contentSize += 2; //Tipo (C = contenido, F = archivo, E = error)
 
 	// Message Request ID
+#ifdef WIN32
 	sprintf_s(measure, 35, "SYPER_REQ_ID=%llu", reqId);
+#else
+	snprintf(measure, 35, "SYPER_REQ_ID=%llu", reqId);
+#endif
 	headerSize += strlen(measure) + 1;
 
 	// All parameters
@@ -298,6 +321,7 @@ void syper_handlerequest(void* vreq) {
 	syper_log(syp, "[%llu] closing zmq port... now the request is over for good", reqId);
 }
 
+SYPERDECL
 void* syper_init() {
 	if (releaseFcgx == 0) {
 		FCGX_Init();
@@ -310,6 +334,7 @@ void* syper_init() {
 	return syp;
 }
 
+SYPERDECL
 void syper_destroy(void* syp) {
 	releaseFcgx -= 1;
 
@@ -322,26 +347,31 @@ void syper_destroy(void* syp) {
 	delete (SyperContext*)syp;
 }
 
+SYPERDECL
 void syper_setzmqcontext(void* vsyp, void* zmqc) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syp->zmq_context = zmqc;
 }
 
+SYPERDECL
 void syper_setmaxthreads(void* vsyp, int max) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syp->maxthreads = max;
 }
 
+SYPERDECL
 void syper_setfcgisocket(void* vsyp, int socket) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syp->fastcgi_socket = socket;
 }
 
+SYPERDECL
 void syper_addzmqbackend(void* vsyp, const char* backend) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syp->zmq_backends.push_back(backend);
 }
 
+SYPERDECL
 void syper_setzmqlog(void* vsyp, const char* zmqlog) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	if (syp->zmq_log != nullptr) {
@@ -351,6 +381,7 @@ void syper_setzmqlog(void* vsyp, const char* zmqlog) {
 	strcpy(syp->zmq_log, zmqlog);
 }
 
+SYPERDECL
 void syper_zmqserver(void* vsyp) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syper_log(syp, "[zmq] started zmq frontend server on %s", SYPER_FRONTEND);
@@ -462,6 +493,7 @@ void syper_logserver(void* vsyp) {
 	pub.close();
 }
 
+SYPERDECL
 void syper_start(void* vsyp) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syp->running = true;
@@ -471,6 +503,7 @@ void syper_start(void* vsyp) {
 	syp->fastcgi_thread = zmq_threadstart(syper_fastcgiserver, vsyp);
 }
 
+SYPERDECL
 void syper_stop(void* vsyp) {
 	SyperContext* syp = (SyperContext*)vsyp;
 	syp->running = false;
@@ -500,7 +533,8 @@ SyperContext::SyperContext() {
 #ifdef WIN32
 	InitializeCriticalSection(&threadmux);
 #else
-	pthread_mutex_init(&threadmux, nullptr);
+	threadmux = new pthread_mutex_t;
+	pthread_mutex_init(threadmux, nullptr);
 #endif
 }
 
@@ -516,19 +550,27 @@ SyperContext::~SyperContext() {
 #ifdef WIN32
 	DeleteCriticalSection(&threadmux);
 #else
-	pthread_mutex_destroy(&threadmux);
+	pthread_mutex_destroy(threadmux);
+	delete threadmux;
 #endif
 }
 
-//std::vector<
-
+SYPERDECL
 void syper_criticalstart(const char* key) {
+#ifdef WIN32
 	SYPER_MUTEX* mutex = nullptr;
-	SYPER_MUTEX_LOCK(&syper_mutex);
+#else
+	SYPER_MUTEX mutex = nullptr;
+#endif
+	SYPER_MUTEX_LOCK(syper_mutex);
 	if (syper_mutexes.find(key) != syper_mutexes.end()) {
 		mutex = syper_mutexes[key];
 	} else {
+#ifdef WIN32
 		mutex = new SYPER_MUTEX;
+#else
+		mutex = new pthread_mutex_t;
+#endif
 		syper_mutexes[key] = mutex;
 #ifdef WIN32
 		InitializeCriticalSection(mutex);
@@ -536,23 +578,36 @@ void syper_criticalstart(const char* key) {
 		pthread_mutex_init(mutex, nullptr);
 #endif
 	}
-	SYPER_MUTEX_UNLOCK(&syper_mutex);
+	SYPER_MUTEX_UNLOCK(syper_mutex);
 
+#ifdef WIN32
+	SYPER_MUTEX_LOCK(*mutex);
+#else
 	SYPER_MUTEX_LOCK(mutex);
+#endif
 }
 
+SYPERDECL
 void syper_criticalend(const char* key) {
+#ifdef WIN32
 	SYPER_MUTEX* mutex = nullptr;
-	SYPER_MUTEX_LOCK(&syper_mutex);
+#else
+	SYPER_MUTEX mutex = nullptr;
+#endif
+	SYPER_MUTEX_LOCK(syper_mutex);
 	if (syper_mutexes.find(key) != syper_mutexes.end()) {
 		mutex = syper_mutexes[key];
 	} else {
-		SYPER_MUTEX_UNLOCK(&syper_mutex);
+		SYPER_MUTEX_UNLOCK(syper_mutex);
 		return;
 	}
-	SYPER_MUTEX_UNLOCK(&syper_mutex);
+	SYPER_MUTEX_UNLOCK(syper_mutex);
 
+#ifdef WIN32
+	SYPER_MUTEX_UNLOCK(*mutex);
+#else
 	SYPER_MUTEX_UNLOCK(mutex);
+#endif
 }
 
 #define SYPER_THREAD_CRITICAL "SYPER_THREAD_CRITICAL"
@@ -566,14 +621,8 @@ static unsigned __stdcall //int
 #else
 void*
 #endif
-syper_thread(
-#ifdef WIN32
-	//LPVOID vdata) {
-	void* vdata) {
+syper_thread(void* vdata) {
 	SyperThreadData* data = (SyperThreadData*)vdata;
-#else
-	SyperThreadData* data) {
-#endif
 	data->threadfunc(data->param);
 
 	syper_criticalstart(SYPER_THREAD_CRITICAL);
@@ -598,6 +647,7 @@ syper_thread(
 #endif
 }
 
+SYPERDECL
 int syper_threadstart(const char* key, int options, void (*threadfunc)(void*), void* param) {
 	syper_criticalstart(SYPER_THREAD_CRITICAL);
 	if (syper_threads.find(key) != syper_threads.end()) {
@@ -634,6 +684,7 @@ int syper_threadstart(const char* key, int options, void (*threadfunc)(void*), v
 	return 0;
 }
 
+SYPERDECL
 const char* syper_threadname() {
 #ifdef WIN32
 	DWORD threadId = GetCurrentThreadId();
@@ -641,7 +692,7 @@ const char* syper_threadname() {
 	pthread_t threadId = pthread_self();
 #endif
 	syper_criticalstart(SYPER_THREAD_CRITICAL);
-	for (std::hash_map <std::string, SyperThreadData*>::iterator item = syper_threads.begin(); item != syper_threads.end(); item++) {
+	for (unordered_map <std::string, SyperThreadData*>::iterator item = syper_threads.begin(); item != syper_threads.end(); item++) {
 		SYPER_THREAD thread = item->second->thread;
 
 #ifdef WIN32
@@ -657,6 +708,7 @@ const char* syper_threadname() {
 	return "";
 }
 
+SYPERDECL
 int syper_threadalive(const char* key) {
 	syper_criticalstart(SYPER_THREAD_CRITICAL);
 	if (syper_threads.find(key) != syper_threads.end()) {
@@ -667,6 +719,7 @@ int syper_threadalive(const char* key) {
 	return 0;
 }
 
+SYPERDECL
 void syper_threadjoin(const char* key) {
 	SYPER_THREAD thread = nullptr;
 	syper_criticalstart(SYPER_THREAD_CRITICAL);
@@ -683,6 +736,6 @@ void syper_threadjoin(const char* key) {
 	WaitForSingleObject(thread, INFINITE);
 	CloseHandle(thread);
 #else
-	pthread_join(thread);
+	pthread_join(*thread, nullptr);
 #endif
 }

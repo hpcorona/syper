@@ -13,6 +13,9 @@
 #include <zmq.h>
 #include "util.h"
 #include "stdafx.h"
+#ifndef WIN32
+#include <string.h>
+#endif
 
 MsgQ::MsgQ(void* ctx, int type) {
 	this->context = ctx;
@@ -247,7 +250,7 @@ MsgQException::MsgQException(const char* str) {
 	errstr[size] = 0;
 }
 
-MsgQException::~MsgQException() {
+MsgQException::~MsgQException() throw() {
 	if (errstr != nullptr) {
 		free(errstr);
 	}
